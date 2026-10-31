@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.svg">
+<title>Morning Helper</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --text:#f1f5f9; --dim:#94a3b8; --accent:#fbbf24; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:max(20px,env(safe-area-inset-top)) 16px 40px; background:var(--bg); color:var(--text);
+         font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif; max-width:480px; margin:0 auto; }
+  h1 { font-size:1.8rem; margin:8px 0 2px; } .date { color:var(--dim); margin-bottom:18px; }
+  .card { background:var(--card); border-radius:16px; padding:16px; margin-bottom:14px; }
+  .card h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin:0 0 10px; }
+  .temp { font-size:2.6rem; font-weight:700; } .tip { color:var(--accent); margin-top:6px; }
+  ul { list-style:none; padding:0; margin:0; }
+  li { display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid #334155; font-size:1.05rem; }
+  li:last-child { border-bottom:0; } li.done span { text-decoration:line-through; color:var(--dim); }
+  input[type=checkbox] { width:22px; height:22px; accent-color:var(--accent); }
+  li button { margin-left:auto; background:none; border:0; color:var(--dim); font-size:1.2rem; }
+  form { display:flex; gap:8px; margin-top:12px; }
+  form input { flex:1; padding:10px; border-radius:10px; border:0; background:#0f172a; color:var(--text); font-size:1rem; }
+  form button, .btn { padding:10px 14px; border-radius:10px; border:0; background:var(--accent); color:#000; font-weight:600; }
+  .quote { font-style:italic; } .small { color:var(--dim); font-size:.85rem; margin-top:6px; }
+</style>
+</head>
+<body>
+  <h1 id="greeting">Good morning</h1>
+  <div class="date" id="date"></div>
+
+  <div class="card"><h2>Weather</h2><div id="weather">Loading…</div></div>
+
+  <div class="card"><h2>Today</h2>
+    <ul id="list"></ul>
+    <form id="add"><input id="newItem" placeholder="Add a task…" autocomplete="off"><button>Add</button></form>
+    <div class="small" id="progress"></div>
+  </div>
+
+  <div class="card"><h2>Thought for the day</h2><div class="quote" id="quote"></div></div>
+
+  <div class="card"><h2>Reminder</h2>
+    <button class="btn" id="remind">Turn on morning reminder</button>
+    <div class="small" id="remindNote">Shows a notification when you open the app after your set time. Tip: set a phone alarm/shortcut that opens this app.</div>
+  </div>
+
+<script>
+const $ = id => document.getElementById(id);
+const today = new Date().toISOString().slice(0,10);
+const now = new Date();
+
+// Greeting + date
+const h = now.getHours();
+$('greeting').textContent = h < 12 ? 'Good morning ☀️' : h < 18 ? 'Good afternoon' : 'Good evening';
+$('date').textContent = now.toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'});
+
+// Checklist: recurring items persist, "done" state resets each day
+const DEFAULTS = ['Drink a glass of water','Take meds / vitamins','Stretch for 5 minutes','Review today\'s plan'];
+let state = JSON.parse(localStorage.getItem('morning') || 'null') || { items: DEFAULTS.map(t=>({t})), day: today, done: [] };
+if (state.day !== today) { state.day = today; state.done = []; }
+const save = () => localStorage.setItem('morning', JSON.stringify(state));
+function render() {
+  $('list').innerHTML = '';
+  state.items.forEach((it,i) => {
+    const li = document.createElement('li'); const d = state.done.includes(i);
+    li.className = d ? 'done' : '';
+    li.innerHTML = `<input type="checkbox" ${d?'checked':''}><span></span><button aria-label="Remove">✕</button>`;
+    li.querySelector('span').textContent = it.t;
+    li.querySelector('input').onchange = () => { state.done = d ? state.done.filter(x=>x!==i) : [...state.done,i]; save(); render(); };
+    li.querySelector('button').onclick = () => { state.items.splice(i,1); state.done = state.done.filter(x=>x!==i).map(x=>x>i?x-1:x); save(); render(); };
+    $('list').appendChild(li);
+  });
+  $('progress').textContent = `${state.done.length} of ${state.items.length} done`;
+}
+$('add').onsubmit = e => { e.preventDefault(); const v = $('newItem').value.trim(); if (v) { state.items.push({t:v}); $('newItem').value=''; save(); render(); } };
+render();
+
+// Quote (rotates by day of year)
+const QUOTES = ['Small steps every day add up.','Start where you are. Use what you have.','Do the next right thing.','Energy flows where attention goes.','You don\'t have to be perfect, just begin.','Today is a fresh page.','Done is better than perfect.'];
+$('quote').textContent = QUOTES[Math.floor((now - new Date(now.getFullYear(),0,0))/864e5) % QUOTES.length];
+
+// Weather via Open-Meteo (no API key)
+const CODES = {0:'Clear',1:'Mostly clear',2:'Partly cloudy',3:'Overcast',45:'Fog',48:'Fog',51:'Light drizzle',53:'Drizzle',55:'Heavy drizzle',61:'Light rain',63:'Rain',65:'Heavy rain',71:'Light snow',73:'Snow',75:'Heavy snow',80:'Showers',81:'Showers',82:'Heavy showers',95:'Thunderstorm',96:'Thunderstorm',99:'Thunderstorm'};
+function tip(temp, code, rain) {
+  const bits = [];
+  bits.push(temp < 5 ? 'Heavy coat and a hat 🧥' : temp < 14 ? 'Jacket or sweater 🧶' : temp < 22 ? 'Light layers 👕' : 'T-shirt weather 😎');
+  if (rain >= 40 || (code>=51 && code<=99 && code!==71)) bits.push('bring an umbrella ☔');
+  return bits.join(' — ');
+}
+async function weather(lat, lon) {
+  try {
+    const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weather_code&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto`);
+    const j = await r.json(); const t = Math.round(j.current.temperature_2m), c = j.current.weather_code;
+    const rain = j.daily.precipitation_probability_max[0];
+    $('weather').innerHTML = `<div class="temp">${t}°C</div><div>${CODES[c]||'—'} · High ${Math.round(j.daily.temperature_2m_max[0])}° / Low ${Math.round(j.daily.temperature_2m_min[0])}° · ${rain}% rain</div><div class="tip">${tip(t,c,rain)}</div>`;
+  } catch { $('weather').textContent = 'Weather unavailable (offline?).'; }
+}
+const saved = JSON.parse(localStorage.getItem('loc') || 'null');
+if (saved) weather(saved.lat, saved.lon);
+if (navigator.geolocation) navigator.geolocation.getCurrentPosition(
+  p => { localStorage.setItem('loc', JSON.stringify({lat:p.coords.latitude,lon:p.coords.longitude})); weather(p.coords.latitude,p.coords.longitude); },
+  () => { if (!saved) $('weather').textContent = 'Allow location to see your weather.'; });
+
+// Reminder notification (fires when app is opened; true background push needs a server)
+$('remind').onclick = async () => {
+  if (!('Notification' in window)) return $('remindNote').textContent = 'Notifications not supported here (on iPhone, add to Home Screen first).';
+  if (await Notification.requestPermission() === 'granted') { localStorage.setItem('remind','1'); $('remind').textContent = 'Reminder on ✓'; }
+};
+if (localStorage.getItem('remind') && Notification.permission === 'granted' && localStorage.getItem('notified') !== today && h >= 5 && h < 12) {
+  localStorage.setItem('notified', today);
+  new Notification('Good morning!', { body: `${state.items.length - state.done.length} things on your list today.`, icon: 'icon.svg' });
+}
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+</script>
+</body>
+</html>
