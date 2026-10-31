@@ -207,7 +207,7 @@ async function loadAgenda(settings, now) {
   if (rs.status === "ok") {
     try {
       const raw = await Reminder.allIncomplete(rs.lists);
-      a.reminders = raw.filter((r) => r.dueDate && r.dueDate < tom0)
+      a.reminders = raw.filter((r) => r.dueDate && r.dueDate >= today0 && r.dueDate < tom0) // due today only
         .map((r) => ({
           title: (r.title || "Untitled").trim(),
           due: r.dueDate,
@@ -235,7 +235,7 @@ function demoAgenda(now) {
     ],
     reminders: [
       { title: "Send weekly update", due: at(0, 0), hasTime: false, overdue: false },
-      { title: "Book train tickets", due: addDays(at(0, 0), -1), hasTime: false, overdue: true },
+      { title: "Book train tickets", due: at(17, 0), hasTime: true, overdue: false },
     ],
   };
 }
@@ -896,7 +896,7 @@ async function chooseReminderLists(settings, firstRun) {
   }
   const items = rs.all.map((c) => ({ id: c.identifier, title: c.title }));
   const selected = firstRun && settings.reminderListIds.length === 0 ? items.map((i) => i.id) : settings.reminderListIds;
-  const res = await pickMany("Reminder lists to include", "Only incomplete reminders that are overdue or due today are shown.", items, selected);
+  const res = await pickMany("Reminder lists to include", "Only incomplete reminders due today are shown.", items, selected);
   if (res) settings.reminderListIds = res;
   return true;
 }
