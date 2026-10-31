@@ -30,6 +30,7 @@ const C = {
   dim: new Color("#8C95A4"),
   blue: new Color("#3D9BFF"),
   amber: new Color("#F2B661"),
+  tile: new Color("#15253D"),
 };
 
 const ACTIVITIES = [
@@ -65,9 +66,9 @@ const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 function greeting(now) {
   const h = now.getHours();
   if (h < 5) return "Hello";
-  if (h < 12) return "Good morning";
-  if (h < 18) return "Good afternoon";
-  return "Good evening";
+  if (h < 12) return "Morning";
+  if (h < 18) return "Afternoon";
+  return "Evening";
 }
 
 function validTime(s) {
@@ -219,20 +220,22 @@ async function loadAgenda(settings, now) {
   return a;
 }
 
+// Sample data is always shown as if it were 08:30 today, so the layout is easy to judge.
+function demoNow(now) { const d = startOfDay(now); d.setHours(8, 30, 0, 0); return d; }
+
 function demoAgenda(now) {
-  const at = (mins) => { const d = new Date(now.getTime() + mins * 60000); d.setMinutes(Math.ceil(d.getMinutes() / 5) * 5, 0, 0); return d; };
-  const mk = (title, s, dur) => ({ title, location: "", start: at(s), end: at(s + dur), allDay: false, kind: "timed" });
   const t0 = startOfDay(now);
+  const at = (h, m) => { const d = new Date(t0); d.setHours(h, m, 0, 0); return d; };
+  const mk = (title, sh, sm, eh, em) => ({ title, location: "", start: at(sh, sm), end: at(eh, em), allDay: false, kind: "timed" });
   return {
     demo: true, calStatus: "ok", remStatus: "ok", nextLater: null,
     events: [
-      mk("Site review", 30, 60), mk("Client call", 180, 30), mk("Project planning", 360, 60),
+      mk("Site review", 9, 0, 10, 0), mk("Client call", 11, 30, 12, 0), mk("Project planning", 15, 0, 16, 0),
       { title: "Carlisle", location: "", start: t0, end: addDays(t0, 1), allDay: true, kind: "overnight" },
-      { title: "Team offsite", location: "", start: t0, end: addDays(t0, 1), allDay: true, kind: "allday" },
     ],
     reminders: [
-      { title: "Send weekly update", due: now, hasTime: false, overdue: false },
-      { title: "Book train tickets", due: addDays(now, -1), hasTime: false, overdue: true },
+      { title: "Send weekly update", due: at(0, 0), hasTime: false, overdue: false },
+      { title: "Book train tickets", due: addDays(at(0, 0), -1), hasTime: false, overdue: true },
     ],
   };
 }
@@ -305,6 +308,12 @@ function vstack(parent, spacing) {
 function divider(parent) {
   const d = parent.addStack();
   d.size = new Size(0, 1);
+  d.backgroundColor = C.line;
+}
+
+function vdivider(parent, h) {
+  const d = parent.addStack();
+  d.size = new Size(1, h);
   d.backgroundColor = C.line;
 }
 
@@ -412,12 +421,14 @@ function addCompact(parent, e, size) {
   txt(row, compactText(e), size, C.dim);
 }
 
-function addRoutineLink(parent, settings, day, size) {
+function addRoutineLink(parent, settings, day, size, short) {
   const n = doneCount(day);
   const row = hstack(parent, 5);
   row.url = runUrl("routine");
   icon(row, n === 3 ? "checkmark.circle.fill" : "sunrise", size + 1, C.blue);
-  const txtLabel = day.skipped ? "Routine skipped · Reopen" : n === 3 ? "Routine done · Reopen" : `Routine ${n} of 3 · Open`;
+  const txtLabel = short
+    ? (day.skipped ? "Routine skipped" : n === 3 ? "Routine done" : `Routine ${n}/3`)
+    : (day.skipped ? "Routine skipped · Reopen" : n === 3 ? "Routine done · Reopen" : `Routine ${n} of 3 · Open`);
   txt(row, txtLabel, size, C.blue, "medium");
 }
 
@@ -468,30 +479,36 @@ function buildDayWidget(settings, data, day, a, now, fam) {
     return w;
   }
 
-  // ---- featured + reminders
-  const maxRem = large ? 3 : 1;
-  const top = hstack(w, 12);
-  top.topAlignContent();
-  const featCol = vstack(top, 2);
+  // ---- featured (icon tile + next up) and, on medium, reminders beside it
+  const top = hstack(w, 10);
+  const tile = top.addStack();
+  tile.size = new Size(large ? 46 : 34, large ? 46 : 34);
+  tile.cornerRadius = large ? 13 : 9;
+  tile.backgroundColor = C.tile;
+  tile.centerAlignContent();
+  icon(tile, "calendar", large ? 23 : 17, C.blue);
+  const featCol = vstack(top, 1);
   if (a.calStatus !== "ok") {
     statusLine(featCol, calendarMessage(a.calStatus), large ? 12 : 10.5);
   } else if (sh.featured) {
-    label(featCol, sh.featuredIsNow ? "Now" : "Next up");
     const f = sh.featured;
-    txt(featCol, `${fmtTime(f.start)} – ${fmtTime(f.end)}`, large ? 20 : 14, C.blue, "semibold");
-    txt(featCol, f.title, large ? 19 : 15, C.text, "semibold", large ? 2 : 1);
+    label(featCol, `${sh.featuredIsNow ? "Now" : "Next up"} · ends ${fmtTime(f.end)}`);
+    const row = hstack(featCol, 8);
+    txt(row, fmtTime(f.start), large ? 22 : 17, C.blue, "semibold");
+    txt(row, f.title, large ? 20 : 17, C.text, "semibold");
     if (large && f.location) txt(featCol, f.location, 12, C.dim);
   } else {
     label(featCol, "Today");
-    emptyAgendaBlock(featCol, a, large ? 15 : 12.5);
+    emptyAgendaBlock(featCol, a, large ? 15 : 12);
   }
 
   if (!large) {
     top.addSpacer();
+    vdivider(top, 34);
     const remCol = vstack(top, 2);
-    remCol.size = new Size(128, 0);
+    remCol.size = new Size(126, 0);
     label(remCol, "Don’t forget");
-    addReminders(remCol, a, sh, maxRem, 12.5, settings);
+    addReminders(remCol, a, sh, 1, 12.5, settings);
   }
 
   // ---- upcoming
@@ -512,11 +529,12 @@ function buildDayWidget(settings, data, day, a, now, fam) {
       });
       if (sh.upcoming.length > 4) txt(w, `+${sh.upcoming.length - 4} more`, 12, C.dim);
     } else {
-      const r = hstack(w, 14);
-      sh.upcoming.slice(0, 2).forEach((e) => {
-        const c = hstack(r, 6);
-        txt(c, fmtTime(e.start), 13, C.blue, "semibold");
-        txt(c, e.title, 13, C.text, "medium");
+      const r = hstack(w, 10);
+      sh.upcoming.slice(0, 2).forEach((e, i) => {
+        if (i) { r.addSpacer(); vdivider(r, 18); }
+        const c = hstack(r, 7);
+        txt(c, fmtTime(e.start), 15, C.blue, "semibold");
+        txt(c, e.title, 15, C.text, "medium");
       });
       if (sh.upcoming.length > 2) txt(r, `+${sh.upcoming.length - 2}`, 11, C.dim);
     }
@@ -534,20 +552,30 @@ function buildDayWidget(settings, data, day, a, now, fam) {
 
   w.addSpacer();
 
-  // ---- compact all-day / overnight
-  if (a.calStatus === "ok" && sh.compact.length) {
-    if (large) { divider(w); w.addSpacer(8); label(w, "All day & overnight"); w.addSpacer(3); }
-    const maxC = large ? 4 : 2;
-    if (large) sh.compact.slice(0, maxC).forEach((e) => { addCompact(w, e, 12.5); w.addSpacer(2); });
-    else {
-      const r = hstack(w, 12);
-      sh.compact.slice(0, maxC).forEach((e) => addCompact(r, e, 11));
+  // ---- medium: one compact footer row (overnight / all-day + routine link)
+  if (!large) {
+    divider(w);
+    w.addSpacer(4);
+    const r = hstack(w, 8);
+    if (a.calStatus === "ok" && sh.compact.length) {
+      addCompact(r, sh.compact[0], 11.5);
+      if (sh.compact.length > 1) txt(r, `+${sh.compact.length - 1}`, 10.5, C.dim);
     }
+    r.addSpacer();
+    addRoutineLink(r, settings, day, 10.5, true);
+    return w;
+  }
+
+  // ---- large: compact all-day / overnight list
+  if (a.calStatus === "ok" && sh.compact.length) {
+    divider(w); w.addSpacer(8); label(w, "All day & overnight"); w.addSpacer(3);
+    const maxC = 4;
+    sh.compact.slice(0, maxC).forEach((e) => { addCompact(w, e, 12.5); w.addSpacer(2); });
     if (sh.compact.length > maxC) txt(w, `+${sh.compact.length - maxC} more all-day`, 10.5, C.dim);
   }
-  w.addSpacer(large ? 8 : 3);
+  w.addSpacer(8);
   const foot = hstack(w);
-  addRoutineLink(foot, settings, day, large ? 12 : 10.5);
+  addRoutineLink(foot, settings, day, 12);
   if (storageProblem) { foot.addSpacer(); statusLine(foot, "Storage issue", 10); }
   return w;
 }
@@ -575,19 +603,19 @@ function buildSetupWidget() {
   return w;
 }
 
-async function buildWidget(settings, data, now, fam) {
-  if (!settings.setupDone && !settings.demo) return buildSetupWidget();
+async function buildWidget(settings, data, now, fam, force) {
+  if (!settings.setupDone && !settings.demo && !force) return buildSetupWidget();
   const day = getDay(data, dayKey(now)); // not saved from the widget: reading only
-  const mode = chooseMode(now, settings, day);
-  let w;
-  if (mode === "routine") w = buildRoutineWidget(settings, day, now, fam);
-  else {
-    const a = await loadAgenda(settings, now);
-    w = buildDayWidget(settings, data, day, a, now, fam);
-    w.refreshAfterDate = nextRefresh(a, now, settings, mode);
+  const mode = force || chooseMode(now, settings, day);
+  if (mode === "routine") {
+    const w = buildRoutineWidget(settings, day, now, fam);
+    w.refreshAfterDate = nextRefresh(null, now, settings, mode);
     return w;
   }
-  w.refreshAfterDate = nextRefresh(null, now, settings, mode);
+  const t = settings.demo ? demoNow(now) : now;
+  const a = await loadAgenda(settings, t);
+  const w = buildDayWidget(settings, data, day, a, t, fam);
+  w.refreshAfterDate = nextRefresh(a, now, settings, mode);
   return w;
 }
 
@@ -748,6 +776,28 @@ async function presentMyDay(settings, data) {
   await w.presentLarge();
 }
 
+async function presentPreview(settings, data) {
+  const opts = [
+    ["Morning routine · Medium", "routine", "medium", false],
+    ["Morning routine · Large", "routine", "large", false],
+    ["My Day · Medium (your data)", "day", "medium", false],
+    ["My Day · Large (your data)", "day", "large", false],
+    ["My Day · Medium (SAMPLE data)", "day", "medium", true],
+    ["My Day · Large (SAMPLE data)", "day", "large", true],
+  ];
+  const a = new Alert();
+  a.title = "Preview widget";
+  a.message = "Sample data is clearly labelled and shown as if it were 08:30.";
+  opts.forEach((o) => a.addAction(o[0]));
+  a.addCancelAction("Cancel");
+  const i = await a.presentAlert();
+  if (i < 0) return;
+  const [, mode, fam, demo] = opts[i];
+  const s = demo ? Object.assign({}, settings, { demo: true }) : settings;
+  const w = await buildWidget(s, data, new Date(), fam, mode);
+  if (fam === "large") await w.presentLarge(); else await w.presentMedium();
+}
+
 async function showPastGratitude(data) {
   const table = new UITable();
   table.showSeparators = true;
@@ -895,7 +945,7 @@ async function showMenu(settings, data) {
     mkRow(table, { title: "Morning Briefing", subtitle: `${fmtDateLong(now)}${settings.demo ? " · DEMO MODE ON" : ""}`, height: 64 });
     if (storageProblem) mkRow(table, { title: "Storage issue", subtitle: storageProblem, titleColor: Color.orange(), height: 64 });
     mkRow(table, { title: "Morning routine", subtitle: `${doneCount(day)} of 3 complete${day.skipped ? " · skipped" : ""}`, height: 60, onSelect: async () => { await showRoutine(settings, data); await build(); } });
-    mkRow(table, { title: "My day", subtitle: "Preview of the widget (large)", height: 60, onSelect: async () => { await presentMyDay(settings, data); } });
+    mkRow(table, { title: "Preview widget", subtitle: "Routine or My Day · Medium or Large · real or sample data", height: 60, onSelect: async () => { await presentPreview(settings, data); } });
     mkRow(table, { title: "Past gratitude", height: 52, onSelect: async () => { await showPastGratitude(data); } });
     mkRow(table, { title: "Settings", height: 52, onSelect: async () => { await showSettings(settings, data); await build(); } });
     table.reload();
