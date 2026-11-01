@@ -34,9 +34,9 @@ const C = {
 };
 
 const ACTIVITIES = [
-  { id: "breathe", symbol: "wind", label: "Breathe for 2 minutes" },
-  { id: "gratitude", symbol: "heart.fill", label: "Write three things I’m grateful for" },
-  { id: "water", symbol: "drop.fill", label: "Drink 500 ml of water" },
+  { id: "breathe", symbol: "wind", short: "Breathe", label: "Breathe for 2 minutes" },
+  { id: "gratitude", symbol: "heart.fill", short: "Gratitude", label: "Write three things I’m grateful for" },
+  { id: "water", symbol: "drop.fill", short: "Water", label: "Drink 500 ml of water" },
 ];
 
 const DEFAULT_SETTINGS = {
@@ -593,6 +593,92 @@ function addReminders(parent, a, sh, max, size, settings) {
   if (sh.remindersTotal > max) txt(parent, `+${sh.remindersTotal - max} more`, size - 2, C.dim);
 }
 
+// ------------------------------------------------------ widget: Lock Screen
+// Lock Screen widgets are tiny and drawn in one tint by iOS. Optional widget Parameter:
+//   (empty) = automatic: routine before the cutoff, otherwise My Day
+//   routine = routine progress   day = next appointments   reminders = today's reminders
+function lockLine(parent, s, size, weight) {
+  const t = parent.addText(String(s));
+  t.font = fontFor(size, weight || "regular");
+  t.lineLimit = 1;
+  t.minimumScaleFactor = 0.7;
+  return t;
+}
+
+async function buildLockWidget(settings, data, now, fam, param) {
+  const w = new ListWidget();
+  try { w.addAccessoryWidgetBackground = true; } catch (e) { /* older iOS */ }
+  const key = String(param || "auto").trim().toLowerCase();
+  const day = getDay(data, dayKey(now));
+  const n = doneCount(day);
+  let mode = chooseMode(now, settings, day);
+  if (key === "routine") mode = "routine";
+  if (key === "day" || key === "reminders") mode = "day";
+  w.url = runUrl(mode === "routine" ? "routine" : "menu");
+
+  let sh = null, a = null;
+  if (mode === "day") {
+    const t = settings.demo ? demoNow(now) : now;
+    a = await loadAgenda(settings, t);
+    sh = shapeAgenda(a, t);
+  }
+  const undone = ACTIVITIES.filter((x) => !day.done[x.id]).map((x) => x.short);
+
+  if (fam === "accessoryInline") {
+    let line;
+    if (mode === "routine") line = `Routine ${n}/3${undone.length ? " · " + undone[0] : ""}`;
+    else if (a.calStatus !== "ok") line = "Calendar unavailable";
+    else if (key === "reminders") line = a.remStatus !== "ok" ? "Reminders unavailable" : `${sh.remindersTotal} reminder${sh.remindersTotal === 1 ? "" : "s"} today`;
+    else if (sh.featured) line = `${fmtTime(sh.featured.start)} ${sh.featured.title}`;
+    else line = "No more appointments";
+    w.addText(line);
+    return w;
+  }
+
+  if (fam === "accessoryCircular") {
+    const st = w.addStack();
+    st.layoutVertically();
+    st.centerAlignContent();
+    if (mode === "routine") {
+      icon(st, n === 3 ? "checkmark.circle" : "sunrise", 14, Color.white());
+      lockLine(st, `${n}/3`, 16, "bold");
+    } else if (key === "reminders") {
+      icon(st, "checklist", 14, Color.white());
+      lockLine(st, a.remStatus === "ok" ? String(sh.remindersTotal) : "–", 16, "bold");
+    } else {
+      icon(st, "calendar", 13, Color.white());
+      lockLine(st, a.calStatus === "ok" && sh.featured ? fmtTime(sh.featured.start) : "–", 14, "bold");
+    }
+    return w;
+  }
+
+  // accessoryRectangular (and any unknown accessory size)
+  w.setPadding(2, 4, 2, 4);
+  const lines = [];
+  if (mode === "routine") {
+    lines.push([`Routine ${n}/3 · until ${settings.cutoff}`, "bold"]);
+    if (undone.length === 0) lines.push(["All done ✓", "regular"]);
+    undone.slice(0, 2).forEach((u) => lines.push(["○ " + u, "regular"]));
+  } else if (a.calStatus !== "ok" && key !== "reminders") {
+    lines.push(["Calendar unavailable", "bold"], ["Open Morning Briefing", "regular"]);
+  } else if (key === "reminders") {
+    lines.push(["Reminders today", "bold"]);
+    if (a.remStatus !== "ok") lines.push(["Unavailable: check access", "regular"]);
+    else if (sh.remindersTotal === 0) lines.push(["None due today", "regular"]);
+    else sh.reminders.slice(0, 2).forEach((r) => lines.push(["○ " + r.title, "regular"]));
+    if (a.remStatus === "ok" && sh.remindersTotal > 2) lines.push([`+${sh.remindersTotal - 2} more`, "regular"]);
+  } else {
+    if (sh.featured) lines.push([`${sh.featuredIsNow ? "Now" : "Next"} ${fmtTime(sh.featured.start)} ${sh.featured.title}`, "bold"]);
+    else lines.push(["No more appointments", "bold"]);
+    if (sh.upcoming[0]) lines.push([`${fmtTime(sh.upcoming[0].start)} ${sh.upcoming[0].title}`, "regular"]);
+    else if (!sh.featured && a.nextLater) lines.push([`${fmtDateShort(a.nextLater.start)} ${fmtTime(a.nextLater.start)} ${a.nextLater.title}`, "regular"]);
+    else lines.push(["Nothing else today", "regular"]);
+    if (a.remStatus === "ok") lines.push([sh.remindersTotal ? `○ ${sh.reminders[0].title}${sh.remindersTotal > 1 ? " +" + (sh.remindersTotal - 1) : ""}` : "No reminders today", "regular"]);
+  }
+  lines.slice(0, 3).forEach((l) => lockLine(w, l[0], 12, l[1]));
+  return w;
+}
+
 function buildSetupWidget() {
   const w = newWidget();
   w.url = runUrl("menu");
@@ -603,8 +689,12 @@ function buildSetupWidget() {
   return w;
 }
 
-async function buildWidget(settings, data, now, fam, force) {
-  if (!settings.setupDone && !settings.demo && !force) return buildSetupWidget();
+async function buildWidget(settings, data, now, fam, force, param) {
+  if (!settings.setupDone && !settings.demo && !force) {
+    if (String(fam).indexOf("accessory") === 0) { const lw = new ListWidget(); lw.url = runUrl("menu"); lw.addText("Open Morning Briefing to set up"); return lw; }
+    return buildSetupWidget();
+  }
+  if (String(fam).indexOf("accessory") === 0) return buildLockWidget(settings, data, now, fam, param);
   const day = getDay(data, dayKey(now)); // not saved from the widget: reading only
   const mode = force || chooseMode(now, settings, day);
   if (mode === "routine") {
@@ -784,6 +874,9 @@ async function presentPreview(settings, data) {
     ["My Day · Large (your data)", "day", "large", false],
     ["My Day · Medium (SAMPLE data)", "day", "medium", true],
     ["My Day · Large (SAMPLE data)", "day", "large", true],
+    ["Lock Screen · Rectangular", "auto", "accessoryRectangular", false],
+    ["Lock Screen · Circular", "auto", "accessoryCircular", false],
+    ["Lock Screen · Inline", "auto", "accessoryInline", false],
   ];
   const a = new Alert();
   a.title = "Preview widget";
@@ -794,8 +887,14 @@ async function presentPreview(settings, data) {
   if (i < 0) return;
   const [, mode, fam, demo] = opts[i];
   const s = demo ? Object.assign({}, settings, { demo: true }) : settings;
-  const w = await buildWidget(s, data, new Date(), fam, mode);
-  if (fam === "large") await w.presentLarge(); else await w.presentMedium();
+  const w = await buildWidget(s, data, new Date(), fam, mode === "auto" ? undefined : mode);
+  if (fam === "large") await w.presentLarge();
+  else if (fam === "medium") await w.presentMedium();
+  else {
+    const fn = { accessoryRectangular: "presentAccessoryRectangular", accessoryCircular: "presentAccessoryCircular", accessoryInline: "presentAccessoryInline" }[fam];
+    if (typeof w[fn] === "function") await w[fn]();
+    else await say("Preview not available", "Add the widget to your Lock Screen to see it.");
+  }
 }
 
 async function showPastGratitude(data) {
@@ -962,7 +1061,7 @@ async function main() {
   if (config.runsInWidget) {
     let w;
     try {
-      w = await buildWidget(settings, data, new Date(), config.widgetFamily || "medium");
+      w = await buildWidget(settings, data, new Date(), config.widgetFamily || "medium", undefined, args.widgetParameter);
     } catch (e) {
       w = newWidget();
       txt(w, "Morning Briefing", 16, C.text, "semibold");
