@@ -16,6 +16,8 @@
  *
  * Run the script inside Scriptable for setup, the routine, settings and past gratitude.
  * Add it as a Medium or Large Scriptable widget (Large recommended).
+ * Widget Parameter (optional): "day" = always My Day, "routine" = always the routine,
+ * empty = automatic. Lock Screen widgets also accept "reminders".
  */
 
 const TEST = typeof globalThis.__MB_TEST__ !== "undefined";
@@ -49,7 +51,7 @@ const DEFAULT_SETTINGS = {
   demo: false, // demo mode: explicitly labelled, OFF by default
 };
 
-const HOTEL_RE = /\b(hotel|inn|hostel|motel|lodge|b&b|airbnb|overnight|travelodge|premier inn)\b/i;
+const HOTEL_RE = /\b(hotel|inn|hostel|motel|lodge|b&b|airbnb|overnight|travelodge|premier inn)\b|^\s*stay\s*:/i;
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -696,7 +698,10 @@ async function buildWidget(settings, data, now, fam, force, param) {
   }
   if (String(fam).indexOf("accessory") === 0) return buildLockWidget(settings, data, now, fam, param);
   const day = getDay(data, dayKey(now)); // not saved from the widget: reading only
-  const mode = force || chooseMode(now, settings, day);
+  // Widget Parameter "day" or "routine" pins the view; empty = automatic.
+  const p = String(param || "").trim().toLowerCase();
+  const pinned = p === "day" || p === "routine" ? p : undefined;
+  const mode = force || pinned || chooseMode(now, settings, day);
   if (mode === "routine") {
     const w = buildRoutineWidget(settings, day, now, fam);
     w.refreshAfterDate = nextRefresh(null, now, settings, mode);
