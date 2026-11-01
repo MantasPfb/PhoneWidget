@@ -36,7 +36,7 @@ const C = {
 };
 
 const ACTIVITIES = [
-  { id: "breathe", symbol: "wind", short: "Breathe", label: "Breathe for 2 minutes" },
+  { id: "breathe", symbol: "wind", short: "Breathe", label: "Breathe for 5 minutes" },
   { id: "gratitude", symbol: "heart.fill", short: "Gratitude", label: "Write three things I’m grateful for" },
   { id: "water", symbol: "drop.fill", short: "Water", label: "Drink 500 ml of water" },
 ];
@@ -119,6 +119,7 @@ function loadSettings() {
   const s = Object.assign({}, DEFAULT_SETTINGS, readJSON("settings", {}));
   if (!Array.isArray(s.labels) || s.labels.length !== 3) s.labels = DEFAULT_SETTINGS.labels.slice();
   s.labels = s.labels.map((l, i) => (typeof l === "string" && l.trim() ? l.trim() : DEFAULT_SETTINGS.labels[i]));
+  if (s.labels[0] === "Breathe for 2 minutes") s.labels[0] = DEFAULT_SETTINGS.labels[0]; // upgrade old default to 5 min
   if (!validTime(s.cutoff)) s.cutoff = "11:00";
   if (!Array.isArray(s.calendarIds)) s.calendarIds = [];
   if (!Array.isArray(s.reminderListIds)) s.reminderListIds = [];
@@ -146,6 +147,8 @@ function getDay(data, key) {
   return day;
 }
 const doneCount = (day) => ACTIVITIES.filter((a) => day.done[a.id]).length;
+// Ticking anything cancels an earlier "skip", so the routine reopens and progress is honest.
+function setDone(day, id, value) { day.done[id] = value === true; if (value) day.skipped = false; }
 
 function chooseMode(now, settings, day) {
   const finished = day.skipped || doneCount(day) === ACTIVITIES.length;
@@ -390,6 +393,7 @@ function buildRoutineWidget(settings, day, now, fam) {
 
   ACTIVITIES.forEach((a, i) => {
     const row = hstack(w, 10);
+    row.url = runUrl("toggle&id=" + a.id); // tap a row to tick / untick it
     const done = day.done[a.id];
     icon(row, done ? "checkmark.circle.fill" : "circle", large ? 22 : 17, done ? C.blue : C.dim);
     txt(row, settings.labels[i], large ? 17 : 14.5, done ? C.dim : C.text, done ? "regular" : "medium");
@@ -401,7 +405,7 @@ function buildRoutineWidget(settings, day, now, fam) {
     w.addSpacer();
     divider(w);
     w.addSpacer(8);
-    txt(w, `Tap to open your routine · My Day appears after it’s finished or at ${settings.cutoff}.`, 11.5, C.dim, "regular", 2);
+    txt(w, `Tap an item to tick it. Tap the title for the full routine. My Day appears when done, skipped, or at ${settings.cutoff}.`, 11.5, C.dim, "regular", 2);
   }
   return w;
 }
@@ -429,15 +433,18 @@ function addRoutineLink(parent, settings, day, size, short) {
   row.url = runUrl("routine");
   icon(row, n === 3 ? "checkmark.circle.fill" : "sunrise", size + 1, C.blue);
   const txtLabel = short
-    ? (day.skipped ? "Routine skipped" : n === 3 ? "Routine done" : `Routine ${n}/3`)
-    : (day.skipped ? "Routine skipped · Reopen" : n === 3 ? "Routine done · Reopen" : `Routine ${n} of 3 · Open`);
+    ? (n === 3 ? "Routine done" : n > 0 ? `Routine ${n}/3` : day.skipped ? "Routine skipped" : "Routine 0/3")
+    : (n === 3 ? "Routine done · Reopen" : n > 0 ? `Routine ${n} of 3 · Open` : day.skipped ? "Routine skipped · Reopen" : "Routine 0 of 3 · Open");
   txt(row, txtLabel, size, C.blue, "medium");
 }
 
-function emptyAgendaBlock(parent, a, size) {
-  txt(parent, "No more appointments today", size, C.dim);
+function emptyAgendaBlock(parent, a, size, stacked) {
+  txt(parent, stacked ? "Nothing more today" : "No more appointments today", size, C.dim);
   if (a.calStatus === "ok") {
-    if (a.nextLater) {
+    if (a.nextLater && stacked) {
+      txt(parent, `Next · ${fmtDateShort(a.nextLater.start).split(" ").slice(0, 2).join(" ")} · ${fmtTime(a.nextLater.start)}`, size - 1, C.blue, "semibold");
+      txt(parent, a.nextLater.title, size - 1, C.text, "medium");
+    } else if (a.nextLater) {
       const row = hstack(parent, 6);
       txt(row, `${fmtDateShort(a.nextLater.start)} · ${fmtTime(a.nextLater.start)}`, size, C.blue, "semibold");
       txt(row, a.nextLater.title, size, C.text, "medium");
@@ -475,7 +482,7 @@ function buildDayWidget(settings, data, day, a, now, fam) {
       label(w, sh.featuredIsNow ? "Now" : "Next up");
       txt(w, `${fmtTime(sh.featured.start)}–${fmtTime(sh.featured.end)}`, 14, C.blue, "semibold");
       txt(w, sh.featured.title, 14, C.text, "semibold", 2);
-    } else emptyAgendaBlock(w, a, 11.5);
+    } else emptyAgendaBlock(w, a, 11.5, true);
     w.addSpacer();
     addRoutineLink(w, settings, day, 10);
     return w;
@@ -501,7 +508,7 @@ function buildDayWidget(settings, data, day, a, now, fam) {
     if (large && f.location) txt(featCol, f.location, 12, C.dim);
   } else {
     label(featCol, "Today");
-    emptyAgendaBlock(featCol, a, large ? 15 : 12);
+    emptyAgendaBlock(featCol, a, large ? 15 : 12, !large);
   }
 
   if (!large) {
@@ -768,7 +775,7 @@ async function persist(settings, data) {
 }
 
 // --- breathing guide (local HTML, no network). Optional; manual completion always available.
-async function showBreathing() {
+async function showBreathing() { // returns true if the user confirms they finished
   const html = `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
 html,body{margin:0;height:100%;background:#0D1015;color:#EEF1F5;font-family:-apple-system,system-ui,sans-serif;text-align:center}
@@ -778,10 +785,10 @@ html,body{margin:0;height:100%;background:#0D1015;color:#EEF1F5;font-family:-app
 h1{font-weight:500;font-size:30px;margin:0}p{margin:0;color:#8C95A4;font-size:16px}
 button{font-size:17px;padding:12px 28px;border-radius:14px;border:0;background:#3D9BFF;color:#fff}
 </style></head><body><div class="wrap">
-<div class="orb" id="o"></div><h1 id="t">Ready?</h1><p id="s">2 minutes · breathe in 4s, out 6s · no breath holds</p>
+<div class="orb" id="o"></div><h1 id="t">Ready?</h1><p id="s">5 minutes · breathe in 4s, out 6s · no breath holds</p>
 <button id="b">Start</button></div>
 <script>
-var TOTAL=120,left=TOTAL,timer=null,o=document.getElementById('o'),t=document.getElementById('t'),s=document.getElementById('s'),b=document.getElementById('b');
+var TOTAL=300,left=TOTAL,timer=null,o=document.getElementById('o'),t=document.getElementById('t'),s=document.getElementById('s'),b=document.getElementById('b');
 function cycle(){t.textContent='Breathe in';o.className='orb in';setTimeout(function(){if(left<=0)return;t.textContent='Breathe out';o.className='orb out';},4000);}
 b.onclick=function(){b.style.display='none';cycle();var c=0;
 timer=setInterval(function(){left--;c++;s.textContent=Math.floor(left/60)+':'+('0'+(left%60)).slice(-2)+' left';
@@ -792,8 +799,14 @@ if(left<=0){clearInterval(timer);o.className='orb out';t.textContent='Well done'
     const wv = new WebView();
     await wv.loadHTML(html);
     await wv.present(true);
+    const q = new Alert();
+    q.title = "Finished your 5 minutes?";
+    q.addAction("Mark breathing done");
+    q.addCancelAction("Not yet");
+    return (await q.presentAlert()) === 0;
   } catch (e) {
-    await say("Guide unavailable", "Breathe gently for two minutes, then tick it off. No guide needed.");
+    await say("Guide unavailable", "Breathe gently for five minutes, then tick it off. No guide needed.");
+    return false;
   }
 }
 
@@ -809,9 +822,9 @@ async function editGratitude(settings, data, day) {
     day.gratitude = day.gratitude.map((_, i) => (a.textFieldValue(i) || "").trim());
   } catch (e) { /* if values can't be read after dismissal, previous text stays */ }
   const complete = day.gratitude.every((g) => g.length > 0);
-  if (idx === 0) day.done.gratitude = complete;
+  if (idx === 0 && complete) setDone(day, "gratitude", true);
   await persist(null, data);
-  if (idx === 0 && !complete) await say("Saved as draft", "Fill in all three to mark this complete.");
+  if (idx === 0 && !complete) await say("Saved as draft", "Saved. Tap “Mark done” when you’re finished, or fill in all three.");
 }
 
 async function showRoutine(settings, data) {
@@ -823,13 +836,13 @@ async function showRoutine(settings, data) {
     const now = new Date();
     const day = getDay(data, dayKey(now));
     const n = doneCount(day);
-    mkRow(table, { title: `${greeting(now)}${settings.name ? ", " + settings.name : ""}.`, subtitle: `${fmtDateLong(now)} · ${n} of 3 complete${day.skipped ? " · skipped for today" : ""}`, height: 70 });
+    mkRow(table, { title: `${greeting(now)}${settings.name ? ", " + settings.name : ""}.`, subtitle: `${fmtDateLong(now)} · ${n} of 3 complete${day.skipped && n < 3 ? " · skipped for today" : ""}`, height: 70 });
 
     // Breathing
-    mkRow(table, { title: `${day.done.breathe ? "✅" : "⬜"}  ${settings.labels[0]}`, subtitle: "Optional guide: breathe in 4s, out 6s, no breath holds.", height: 64 });
+    mkRow(table, { title: `${day.done.breathe ? "✅" : "⬜"}  ${settings.labels[0]}`, subtitle: "Optional 5-minute guide: breathe in 4s, out 6s, no breath holds.", height: 64 });
     mkButtons(table, [
-      { title: "Start guide", color: Color.blue(), onTap: async () => { await showBreathing(); await build(); } },
-      { title: day.done.breathe ? "Undo done" : "Mark done", color: Color.blue(), onTap: async () => { day.done.breathe = !day.done.breathe; await persist(null, data); await build(); } },
+      { title: "Start guide", color: Color.blue(), onTap: async () => { if (await showBreathing()) { setDone(day, "breathe", true); await persist(null, data); } await build(); } },
+      { title: day.done.breathe ? "Undo done" : "Mark done", color: Color.blue(), onTap: async () => { setDone(day, "breathe", !day.done.breathe); await persist(null, data); await build(); } },
     ]);
 
     // Gratitude
@@ -837,16 +850,24 @@ async function showRoutine(settings, data) {
     mkRow(table, { title: `${day.done.gratitude ? "✅" : "⬜"}  ${settings.labels[1]}`, subtitle: g.length ? g.map((x, i) => `${i + 1}. ${x}`).join("\n") : "Three short lines is plenty.", height: g.length ? 100 : 64 });
     mkButtons(table, [
       { title: g.length ? "Edit" : "Write", color: Color.blue(), onTap: async () => { await editGratitude(settings, data, day); await build(); } },
-      ...(day.done.gratitude ? [{ title: "Undo done", color: Color.blue(), onTap: async () => { day.done.gratitude = false; await persist(null, data); await build(); } }] : []),
+      { title: day.done.gratitude ? "Undo done" : "Mark done (said aloud)", color: Color.blue(), onTap: async () => { setDone(day, "gratitude", !day.done.gratitude); await persist(null, data); await build(); } },
     ]);
 
     // Water
     mkRow(table, {
       title: `${day.done.water ? "✅" : "⬜"}  ${settings.labels[2]}`, subtitle: day.done.water ? "Tap to undo" : "Tap when finished", height: 64,
-      onSelect: async () => { day.done.water = !day.done.water; await persist(null, data); await build(); },
+      onSelect: async () => { setDone(day, "water", !day.done.water); await persist(null, data); await build(); },
     });
 
-    if (day.skipped) {
+    if (n === 3) {
+      const go = new UITableRow();
+      go.dismissOnSelect = true; // routine is complete: just close and show My Day
+      go.height = 52;
+      const gc = go.addText("All done · go to my day");
+      gc.titleColor = Color.blue();
+      gc.centerAligned();
+      table.addRow(go);
+    } else if (day.skipped) {
       mkButtons(table, [{ title: "Reopen routine (clear skip)", color: Color.blue(), onTap: async () => { day.skipped = false; await persist(null, data); await build(); } }]);
     } else {
       const skip = new UITableRow();
@@ -864,6 +885,23 @@ async function showRoutine(settings, data) {
   await table.present(false);
   const day = getDay(data, dayKey(new Date()));
   if (day.skipped || doneCount(day) === 3) await presentMyDay(settings, data);
+}
+
+// Opened from a tap on a widget row: tick / untick one item, no forms.
+async function quickToggle(settings, data, id) {
+  const act = ACTIVITIES.find((x) => x.id === id);
+  if (!act) { await say("Unknown item", "That item isn’t part of the routine."); return null; }
+  const day = getDay(data, dayKey(new Date()));
+  setDone(day, id, !day.done[id]);
+  await persist(null, data);
+  const n = doneCount(day);
+  const a = new Alert();
+  a.title = `${day.done[id] ? "✓" : "○"} ${act.short} ${day.done[id] ? "done" : "unticked"}`;
+  a.message = `${n} of 3 complete${n === 3 ? "\nAll done: My Day shows next." : ""}`;
+  a.addAction("OK");
+  a.addAction("Open routine");
+  if ((await a.presentAlert()) === 1) await showRoutine(settings, data);
+  return day;
 }
 
 async function presentMyDay(settings, data) {
@@ -1081,9 +1119,10 @@ async function main() {
   if (!settings.setupDone) await runSetup(settings, data);
   const view = args.queryParameters && args.queryParameters.view;
   if (view === "routine") await showRoutine(settings, data);
+  else if (view === "toggle") await quickToggle(settings, data, args.queryParameters.id);
   else await showMenu(settings, data);
   Script.complete();
 }
 
 if (!TEST) await main();
-else globalThis.__MB__ = { buildWidget, chooseMode, getDay, shapeAgenda, normalizeEvent, loadAgenda, loadSettings, loadData, saveData, saveSettings, nextRefresh, doneCount, validTime, DEFAULT_SETTINGS };
+else globalThis.__MB__ = { buildWidget, chooseMode, getDay, shapeAgenda, normalizeEvent, loadAgenda, loadSettings, loadData, saveData, saveSettings, nextRefresh, doneCount, validTime, DEFAULT_SETTINGS, setDone, quickToggle };
