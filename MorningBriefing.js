@@ -405,7 +405,7 @@ function buildRoutineWidget(settings, day, now, fam) {
     w.addSpacer();
     divider(w);
     w.addSpacer(8);
-    txt(w, `Tap an item to tick it. Tap the title for the full routine. My Day appears when done, skipped, or at ${settings.cutoff}.`, 11.5, C.dim, "regular", 2);
+    txt(w, `Tap an item to tick it (breathing starts its 5-minute timer). My Day appears when done, skipped, or at ${settings.cutoff}.`, 11.5, C.dim, "regular", 2);
   }
   return w;
 }
@@ -774,38 +774,49 @@ async function persist(settings, data) {
   return ok;
 }
 
-// --- breathing guide (local HTML, no network). Optional; manual completion always available.
-async function showBreathing() { // returns true if the user confirms they finished
+// --- breathing guide (local HTML, no network). The ONLY way to complete "breathing" is to let
+// the full 5-minute timer finish: the page signals the script when the timer reaches zero.
+const BREATH_SECONDS = 300;
+
+async function showBreathing() { // resolves true only if the full timer finished
   const html = `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
 html,body{margin:0;height:100%;background:#0D1015;color:#EEF1F5;font-family:-apple-system,system-ui,sans-serif;text-align:center}
 .wrap{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px}
 .orb{width:180px;height:180px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#7CC0FF,#3D9BFF 60%,#1F5FA8);transform:scale(.55);transition:transform 4s ease-in-out,opacity 4s;opacity:.7}
 .orb.in{transform:scale(1);opacity:1}.orb.out{transform:scale(.55);transition:transform 6s ease-in-out,opacity 6s;opacity:.7}
-h1{font-weight:500;font-size:30px;margin:0}p{margin:0;color:#8C95A4;font-size:16px}
+h1{font-weight:500;font-size:30px;margin:0}p{margin:0;color:#8C95A4;font-size:16px;padding:0 24px}
 button{font-size:17px;padding:12px 28px;border-radius:14px;border:0;background:#3D9BFF;color:#fff}
 </style></head><body><div class="wrap">
-<div class="orb" id="o"></div><h1 id="t">Ready?</h1><p id="s">5 minutes · breathe in 4s, out 6s · no breath holds</p>
+<div class="orb" id="o"></div><h1 id="t">Ready?</h1><p id="s">${BREATH_SECONDS / 60} minutes · breathe in 4s, out 6s · no breath holds. Closing early does not count.</p>
 <button id="b">Start</button></div>
 <script>
-var TOTAL=300,left=TOTAL,timer=null,o=document.getElementById('o'),t=document.getElementById('t'),s=document.getElementById('s'),b=document.getElementById('b');
-function cycle(){t.textContent='Breathe in';o.className='orb in';setTimeout(function(){if(left<=0)return;t.textContent='Breathe out';o.className='orb out';},4000);}
-b.onclick=function(){b.style.display='none';cycle();var c=0;
-timer=setInterval(function(){left--;c++;s.textContent=Math.floor(left/60)+':'+('0'+(left%60)).slice(-2)+' left';
+var TOTAL=${BREATH_SECONDS},END=0,timer=null,o=document.getElementById('o'),t=document.getElementById('t'),s=document.getElementById('s'),b=document.getElementById('b');
+function cycle(){t.textContent='Breathe in';o.className='orb in';setTimeout(function(){if(Date.now()>=END)return;t.textContent='Breathe out';o.className='orb out';},4000);}
+b.onclick=function(){b.style.display='none';END=Date.now()+TOTAL*1000;cycle();var c=0;
+timer=setInterval(function(){var left=Math.max(0,Math.ceil((END-Date.now())/1000));c++;s.textContent=Math.floor(left/60)+':'+('0'+(left%60)).slice(-2)+' left';
 if(c%10===0&&left>0)cycle();
-if(left<=0){clearInterval(timer);o.className='orb out';t.textContent='Well done';s.textContent='Close this screen and tick \\u201cbreathing\\u201d to log it.';}},1000);};
+if(left<=0){clearInterval(timer);o.className='orb out';t.textContent='Well done';s.textContent='Timer complete. You can close this screen.';if(window.__signal){window.__signal(true);}}},1000);};
 </script></body></html>`;
   try {
     const wv = new WebView();
     await wv.loadHTML(html);
-    await wv.present(true);
+    const shown = wv.present(true).then(() => "closed");
+    // The page calls window.__signal(true) when the timer ends; Scriptable resolves this promise then.
+    const finished = wv.evaluateJavaScript("window.__signal = function (v) { completion(v); };", true)
+      .then((v) => (v === true ? "finished" : "closed")).catch(() => "error");
+    const first = await Promise.race([finished, shown]);
+    if (first === "finished") { await shown; return true; } // wait for the screen to be closed
+    if (first === "closed") return false; // closed before the timer ended: not counted
+    // Rare fallback: the completion signal isn't available on this device.
+    await shown;
     const q = new Alert();
-    q.title = "Finished your 5 minutes?";
-    q.addAction("Mark breathing done");
-    q.addCancelAction("Not yet");
+    q.title = "Did the full 5 minutes run?";
+    q.addAction("Yes, mark breathing done");
+    q.addCancelAction("No");
     return (await q.presentAlert()) === 0;
   } catch (e) {
-    await say("Guide unavailable", "Breathe gently for five minutes, then tick it off. No guide needed.");
+    await say("Timer unavailable", "The breathing timer could not start, so it was not ticked. Try again.");
     return false;
   }
 }
@@ -839,10 +850,10 @@ async function showRoutine(settings, data) {
     mkRow(table, { title: `${greeting(now)}${settings.name ? ", " + settings.name : ""}.`, subtitle: `${fmtDateLong(now)} · ${n} of 3 complete${day.skipped && n < 3 ? " · skipped for today" : ""}`, height: 70 });
 
     // Breathing
-    mkRow(table, { title: `${day.done.breathe ? "✅" : "⬜"}  ${settings.labels[0]}`, subtitle: "Optional 5-minute guide: breathe in 4s, out 6s, no breath holds.", height: 64 });
+    mkRow(table, { title: `${day.done.breathe ? "✅" : "⬜"}  ${settings.labels[0]}`, subtitle: day.done.breathe ? "Done. Timer completed." : "Tick-off needs the full 5-minute timer: in 4s, out 6s, no breath holds.", height: 64 });
     mkButtons(table, [
-      { title: "Start guide", color: Color.blue(), onTap: async () => { if (await showBreathing()) { setDone(day, "breathe", true); await persist(null, data); } await build(); } },
-      { title: day.done.breathe ? "Undo done" : "Mark done", color: Color.blue(), onTap: async () => { setDone(day, "breathe", !day.done.breathe); await persist(null, data); await build(); } },
+      { title: day.done.breathe ? "Do it again" : "Start 5-minute timer", color: Color.blue(), onTap: async () => { if (await showBreathing()) { setDone(day, "breathe", true); await persist(null, data); } await build(); } },
+      ...(day.done.breathe ? [{ title: "Undo done", color: Color.blue(), onTap: async () => { setDone(day, "breathe", false); await persist(null, data); await build(); } }] : []),
     ]);
 
     // Gratitude
@@ -892,6 +903,17 @@ async function quickToggle(settings, data, id) {
   const act = ACTIVITIES.find((x) => x.id === id);
   if (!act) { await say("Unknown item", "That item isn’t part of the routine."); return null; }
   const day = getDay(data, dayKey(new Date()));
+  if (id === "breathe" && !day.done.breathe) { // breathing can only be completed by the timer
+    const ok = await showBreathing();
+    if (ok) { setDone(day, "breathe", true); await persist(null, data); }
+    const n0 = doneCount(day);
+    const r = new Alert();
+    r.title = ok ? "✓ Breathe done" : "○ Breathing not counted";
+    r.message = ok ? `${n0} of 3 complete${n0 === 3 ? "\nAll done: My Day shows next." : ""}` : "The 5-minute timer didn’t finish, so it stays open.";
+    r.addAction("OK");
+    await r.presentAlert();
+    return day;
+  }
   setDone(day, id, !day.done[id]);
   await persist(null, data);
   const n = doneCount(day);
@@ -1125,4 +1147,4 @@ async function main() {
 }
 
 if (!TEST) await main();
-else globalThis.__MB__ = { buildWidget, chooseMode, getDay, shapeAgenda, normalizeEvent, loadAgenda, loadSettings, loadData, saveData, saveSettings, nextRefresh, doneCount, validTime, DEFAULT_SETTINGS, setDone, quickToggle };
+else globalThis.__MB__ = { buildWidget, chooseMode, getDay, shapeAgenda, normalizeEvent, loadAgenda, loadSettings, loadData, saveData, saveSettings, nextRefresh, doneCount, validTime, DEFAULT_SETTINGS, setDone, quickToggle, showBreathing };
